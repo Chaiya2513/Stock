@@ -81,52 +81,52 @@ interval_mapping = {
 # 2B: MAIN CONTENT AREA ############
 
 # Update the dashboard based on user input
-if st.sidebar.button('Update'):
-    data = fetch_stock_data(ticker, time_period, interval_mapping[time_period])
-    data = process_data(data)
-    data = add_technical_indicators(data)
-    
-    last_close, change, pct_change, high, low, volume = calculate_metrics(data)
-    
-    # Display main metrics
-    st.metric(label=f"{ticker} Last Price", value=f"{last_close:.2f} USD", delta=f"{change:.2f} ({pct_change:.2f}%)")
-    
-    col1, col2, col3 = st.columns(3)
-    col1.metric("High", f"{high:.2f} USD")
-    col2.metric("Low", f"{low:.2f} USD")
-    col3.metric("Volume", f"{volume:,}")
-    
-    # Plot the stock price chart
-    fig = go.Figure()
-    if chart_type == 'Candlestick':
-        fig.add_trace(go.Candlestick(x=data['Datetime'],
-                                     open=data['Open'],
-                                     high=data['High'],
-                                     low=data['Low'],
-                                     close=data['Close']))
-    else:
-        fig = px.line(data, x='Datetime', y='Close')
-    
-    # Add selected technical indicators to the chart
-    for indicator in indicators:
-        if indicator == 'SMA 20':
-            fig.add_trace(go.Scatter(x=data['Datetime'], y=data['SMA_20'], name='SMA 20'))
-        elif indicator == 'EMA 20':
-            fig.add_trace(go.Scatter(x=data['Datetime'], y=data['EMA_20'], name='EMA 20'))
-    
-    # Format graph
-    fig.update_layout(title=f'{ticker} {time_period.upper()} Chart',
-                      xaxis_title='Time',
-                      yaxis_title='Price (USD)',
-                      height=600)
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Display historical data and technical indicators
-    st.subheader('Historical Data')
-    st.dataframe(data[['Datetime', 'Open', 'High', 'Low', 'Close', 'Volume']])
-    
-    st.subheader('Technical Indicators')
-    st.dataframe(data[['Datetime', 'SMA_20', 'EMA_20']])
+#if st.sidebar.button('Update'):
+data = fetch_stock_data(ticker, time_period, interval_mapping[time_period])
+data = process_data(data)
+data = add_technical_indicators(data)
+
+last_close, change, pct_change, high, low, volume = calculate_metrics(data)
+
+# Display main metrics
+st.metric(label=f"{ticker} Last Price", value=f"{last_close:.2f} USD", delta=f"{change:.2f} ({pct_change:.2f}%)")
+
+col1, col2, col3 = st.columns(3)
+col1.metric("High", f"{high:.2f} USD")
+col2.metric("Low", f"{low:.2f} USD")
+col3.metric("Volume", f"{volume:,}")
+
+# Plot the stock price chart
+fig = go.Figure()
+if chart_type == 'Candlestick':
+    fig.add_trace(go.Candlestick(x=data['Datetime'],
+                                 open=data['Open'],
+                                 high=data['High'],
+                                 low=data['Low'],
+                                 close=data['Close']))
+else:
+    fig = px.line(data, x='Datetime', y='Close')
+
+# Add selected technical indicators to the chart
+for indicator in indicators:
+    if indicator == 'SMA 20':
+        fig.add_trace(go.Scatter(x=data['Datetime'], y=data['SMA_20'], name='SMA 20'))
+    elif indicator == 'EMA 20':
+        fig.add_trace(go.Scatter(x=data['Datetime'], y=data['EMA_20'], name='EMA 20'))
+
+# Format graph
+fig.update_layout(title=f'{ticker} {time_period.upper()} Chart',
+                  xaxis_title='Time',
+                  yaxis_title='Price (USD)',
+                  height=600)
+st.plotly_chart(fig, use_container_width=True)
+
+# Display historical data and technical indicators
+st.subheader('Historical Data')
+st.dataframe(data[['Datetime', 'Open', 'High', 'Low', 'Close', 'Volume']])
+
+st.subheader('Technical Indicators')
+st.dataframe(data[['Datetime', 'SMA_20', 'EMA_20']])
 
 
 # 2C: SIDEBAR PRICES ############
