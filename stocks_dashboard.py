@@ -1,126 +1,100 @@
 import streamlit as st
-import plotly.express as px
-import plotly.graph_objects as go
 import pandas as pd
 import yfinance as yf
-from datetime import datetime, timedelta
 import ta
+from streamlit_lightweight_charts import renderLightweightCharts
 
 ##########################################################################################
-## PART 1: Define Functions ##
+## PART 1: Data & Indicators Logic ##
 ##########################################################################################
 
 def fetch_stock_data(ticker, period, interval):
     data = yf.download(ticker, period=period, interval=interval)
-    
-    # แก้ไข Error: ยุบหัวคอลัมน์จาก MultiIndex ให้เป็นชั้นเดียว (Single Level)
     if isinstance(data.columns, pd.MultiIndex):
         data.columns = data.columns.get_level_values(0)
-    
     return data
 
 def process_data(data):
-    if data.empty:
-        return data
-    if data.index.tzinfo is None:
-        data.index = data.index.tz_localize('UTC')
-    data.index = data.index.tz_convert('US/Eastern')
-    data.reset_index(inplace=True)
-    # ปรับชื่อคอลัมน์วันที่ให้เป็นมาตรฐาน
-    if 'Date' in data.columns:
-        data.rename(columns={'Date': 'Datetime'}, inplace=True)
-    return data
-
-def calculate_metrics(data):
-    # มั่นใจว่าเป็นค่าตัวเลขเดี่ยวๆ (Scalar) ด้วย float()
-    last_close = float(data['Close'].iloc[-1])
-    prev_close = float(data['Close'].iloc[0])
-    change = last_close - prev_close
-    pct_change = (change / prev_close) * 100
-    high = float(data['High'].max())
-    low = float(data['Low'].min())
-    volume = int(data['Volume'].sum())
-    return last_close, change, pct_change, high, low, volume
-
-def add_technical_indicators(data):
-    # Library 'ta' ต้องการข้อมูลแบบ Series (1 มิติ) 
-    # การจัดการ MultiIndex ใน fetch_stock_data จะช่วยแก้ Error ตรงนี้
-    data['SMA_20'] = ta.trend.sma_indicator(data['Close'], window=20)
-    data['EMA_20'] = ta.trend.ema_indicator(data['Close'], window=20)
-    return data
+    if data.empty: return data
+    df = data.copy()
+    df.reset_index(inplace=True)
+    time_col = df.columns[0]
+    df.rename(columns={time_col: 'time'}, inplace=True)
+    df['time'] = df['time'].apply(lambda x: int(x.timestamp()))
+    
+    # คำนวณ Indicators
+    df['SMA_20'] = ta.trend.sma_indicator(df['Close'], window=20)
+    # RSI
+    df['RSI'] = ta.momentum.rsi(df['Close'], window=14)
+    # MACD
+    macd_obj = ta.trend.MACD(df['Close'])
+    df['MACD'] = macd_obj.macd()
+    df['MACD_Signal'] = macd_obj.macd_signal()
+    df['MACD_Diff'] = macd_obj.macd_diff()
+    
+    # สีสำหรับ Volume และ MACD Histogram
+    df['vol_color'] = df.apply(lambda x: 'rgba(38, 166, 154, 0.5)' if x['Close'] >= x['Open'] else 'rgba(239, 83, 80, 0.5)', axis=1)
+    df['macd_color'] = df['MACD_Diff'].apply(lambda x: 'rgba(38, 166, 154, 0.8)' if x >= 0 else 'rgba(239, 83, 80, 0.8)')
+    
+    return df
 
 ###############################################
-## PART 2: App Layout ##
+## PART 2: App Layout & Rendering ##
 ###############################################
 
-st.set_page_config(layout="wide")
-st.title('Real Time Stock Dashboard')
+st.set_page_config(layout="wide", page_title="Advanced Trading Dashboard")
+st.title('🚀 Advanced Trading Dashboard (RSI & MACD)')
 
-# 2A: SIDEBAR PARAMETERS
-st.sidebar.header('Chart Parameters')
-ticker = st.sidebar.text_input('Ticker', 'ADBE').upper()
-time_period = st.sidebar.selectbox('Time Period', ['1d', '1wk', '1mo', '1y', 'max'])
-chart_type = st.sidebar.selectbox('Chart Type', ['Candlestick', 'Line'])
-indicators = st.sidebar.multiselect('Technical Indicators', ['SMA 20', 'EMA 20'])
+ticker = st.sidebar.text_input('Ticker Symbol', 'TSLA').upper()
+time_period = st.sidebar.selectbox('Period', ['1mo', '3mo', '6mo', '1y', 'max'], index=1)
+show_vol = st.sidebar.checkbox('Show Volume', value=True)
 
-interval_mapping = {
-    '1d': '1m', '1wk': '30m', '1mo': '1d', '1y': '1wk', 'max': '1wk'
-}
+raw = fetch_stock_data(ticker, time_period, '1d')
 
-# 2B: MAIN CONTENT AREA (รันทันที ไม่ต้องกดปุ่ม Update)
-data = fetch_stock_data(ticker, time_period, interval_mapping[time_period])
+if not raw.empty:
+    df = process_data(raw)
+    
+    # --- 1. กราฟหลัก (Price + SMA + Volume) ---
+    st.subheader(f"Price Chart: {ticker}")
+    main_series = [
+        {"type": "Candlestick", "data": df[['time','Open','High','Low','Close']].rename(columns={'Open':'open','High':'high','Low':'low','Close':'close'}).to_dict('records'), "options": {"upColor": "#26a69a", "downColor": "#ef5350", "borderVisible": False}},
+        {"type": "Line", "data": df[['time','SMA_20']].dropna().rename(columns={'SMA_20':'value'}).to_dict('records'), "options": {"color": "#f29d4b", "lineWidth": 1, "title": "SMA 20"}}
+    ]
+    if show_vol:
+        vol_data = [{"time": r['time'], "value": r['Volume'], "color": r['vol_color']} for _, r in df.iterrows()]
+        main_series.append({"type": "Histogram", "data": vol_data, "options": {"priceFormat": {"type": "volume"}, "priceScaleId": "vol", "title": "Volume"}})
 
-if not data.empty:
-    data = process_data(data)
-    data = add_technical_indicators(data)
-    last_close, change, pct_change, high, low, volume = calculate_metrics(data)
-    
-    # แสดงผล Metric หลัก
-    st.metric(label=f"{ticker} Last Price", value=f"{last_close:.2f} USD", delta=f"{change:.2f} ({pct_change:.2f}%)")
-    
-    col1, col2, col3 = st.columns(3)
-    col1.metric("High", f"{high:.2f} USD")
-    col2.metric("Low", f"{low:.2f} USD")
-    col3.metric("Volume", f"{volume:,}")
-    
-    # วาดกราฟ
-    fig = go.Figure()
-    if chart_type == 'Candlestick':
-        fig.add_trace(go.Candlestick(x=data['Datetime'],
-                                     open=data['Open'], high=data['High'],
-                                     low=data['Low'], close=data['Close'], name='Market Data'))
-    else:
-        fig.add_trace(go.Scatter(x=data['Datetime'], y=data['Close'], mode='lines', name='Close Price'))
-    
-    # เพิ่ม Indicators
-    for indicator in indicators:
-        if indicator == 'SMA 20':
-            fig.add_trace(go.Scatter(x=data['Datetime'], y=data['SMA_20'], name='SMA 20', line=dict(color='orange')))
-        elif indicator == 'EMA 20':
-            fig.add_trace(go.Scatter(x=data['Datetime'], y=data['EMA_20'], name='EMA 20', line=dict(color='blue')))
-    
-    fig.update_layout(title=f'{ticker} {time_period.upper()} Chart', height=600, xaxis_rangeslider_visible=False)
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # ตารางข้อมูล
-    with st.expander("Show Raw Data"):
-        st.subheader('Historical Data')
-        st.dataframe(data[['Datetime', 'Open', 'High', 'Low', 'Close', 'Volume']])
+    renderLightweightCharts(main_series, {
+        "layout": {"background": {"color": "#131722"}, "textColor": "#d1d4dc"},
+        "grid": {"vertLines": {"color": "#242832"}, "horzLines": {"color": "#242832"}},
+        "priceScale": {"scaleMargins": {"top": 0.1, "bottom": 0.2}},
+        "extraPriceScales": {"vol": {"scaleMargins": {"top": 0.7, "bottom": 0}, "visible": False}}
+    })
+
+    # --- 2. กราฟ RSI (หน้าต่างแยก) ---
+    st.subheader("Relative Strength Index (RSI)")
+    rsi_series = [
+        {"type": "Line", "data": df[['time','RSI']].dropna().rename(columns={'RSI':'value'}).to_dict('records'), "options": {"color": "#9b72ff", "lineWidth": 2}},
+    ]
+    renderLightweightCharts(rsi_series, {
+        "layout": {"background": {"color": "#131722"}, "textColor": "#d1d4dc"},
+        "grid": {"vertLines": {"visible": False}, "horzLines": {"color": "#242832"}},
+        "priceScale": {"scaleMargins": {"top": 0.1, "bottom": 0.1}},
+        "height": 150 # ปรับความสูงให้เล็กลง
+    })
+
+    # --- 3. กราฟ MACD (หน้าต่างแยก) ---
+    st.subheader("MACD (Moving Average Convergence Divergence)")
+    macd_series = [
+        {"type": "Line", "data": df[['time','MACD']].dropna().rename(columns={'MACD':'value'}).to_dict('records'), "options": {"color": "#2196f3", "lineWidth": 1.5, "title": "MACD"}},
+        {"type": "Line", "data": df[['time','MACD_Signal']].dropna().rename(columns={'MACD_Signal':'value'}).to_dict('records'), "options": {"color": "#ff5252", "lineWidth": 1.5, "title": "Signal"}},
+        {"type": "Histogram", "data": df[['time','MACD_Diff','macd_color']].rename(columns={'MACD_Diff':'value','macd_color':'color'}).to_dict('records'), "options": {"title": "Histogram"}}
+    ]
+    renderLightweightCharts(macd_series, {
+        "layout": {"background": {"color": "#131722"}, "textColor": "#d1d4dc"},
+        "grid": {"vertLines": {"visible": False}, "horzLines": {"color": "#242832"}},
+        "height": 200
+    })
+
 else:
-    st.error("ไม่สามารถดึงข้อมูลได้ โปรดตรวจสอบชื่อ Ticker อีกครั้ง")
-
-# 2C: SIDEBAR PRICES
-st.sidebar.header('Real-Time Stock Prices')
-stock_symbols = ['AAPL', 'GOOGL', 'AMZN', 'MSFT']
-for symbol in stock_symbols:
-    rt_data = fetch_stock_data(symbol, '1d', '5m') # ใช้ 5m เพื่อลดภาระ API
-    if not rt_data.empty:
-        # ใช้ float() เพื่อป้องกัน Error Data Shape ใน Metric Sidebar
-        l_price = float(rt_data['Close'].iloc[-1])
-        f_open = float(rt_data['Open'].iloc[0])
-        diff = l_price - f_open
-        p_diff = (diff / f_open) * 100
-        st.sidebar.metric(f"{symbol}", f"{l_price:.2f} USD", f"{diff:.2f} ({p_diff:.2f}%)")
-
-st.sidebar.subheader('About')
-st.sidebar.info('Dashboard นี้จะอัปเดตข้อมูลอัตโนมัติเมื่อคุณเปลี่ยนตัวเลือกในแถบด้านข้าง')
+    st.error("Data not found.")
