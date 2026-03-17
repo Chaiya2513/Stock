@@ -3,3 +3,4 @@ plotly
 pandas
 yfinance
 ta
+streamlit-lightweight-charts
