@@ -13,7 +13,6 @@ def fetch_stock_data(ticker, period, interval):
         data = yf.download(ticker, period=period, interval=interval)
         if data.empty:
             return pd.DataFrame()
-        # แก้ไข MultiIndex สำหรับ yfinance version ใหม่
         if isinstance(data.columns, pd.MultiIndex):
             data.columns = data.columns.get_level_values(0)
         return data
@@ -26,27 +25,21 @@ def process_data(data):
     df = data.copy()
     df.reset_index(inplace=True)
     
-    # หาลำดับคอลัมน์เวลา (Date หรือ Datetime)
+    # หาลำดับคอลัมน์เวลา
     time_col = df.columns[0]
     df.rename(columns={time_col: 'time'}, inplace=True)
-    
-    # แปลงเป็น Unix Timestamp สำหรับ Lightweight Charts
     df['time'] = df['time'].apply(lambda x: int(x.timestamp()))
     
-    # --- คำนวณ Indicators ---
-    # SMA 20
+    # คำนวณ Indicators (จัดการค่า NaN ภายในตัว)
     df['SMA_20'] = ta.trend.sma_indicator(df['Close'], window=20)
-    
-    # RSI (14)
     df['RSI'] = ta.momentum.rsi(df['Close'], window=14)
     
-    # MACD
     macd_obj = ta.trend.MACD(df['Close'])
     df['MACD'] = macd_obj.macd()
     df['MACD_Signal'] = macd_obj.macd_signal()
     df['MACD_Diff'] = macd_obj.macd_diff()
     
-    # กำหนดสี Volume และ MACD Histogram
+    # สีสำหรับ Volume และ MACD Histogram
     df['vol_color'] = df.apply(lambda x: 'rgba(38, 166, 154, 0.5)' if x['Close'] >= x['Open'] else 'rgba(239, 83, 80, 0.5)', axis=1)
     df['macd_color'] = df['MACD_Diff'].apply(lambda x: 'rgba(38, 166, 154, 0.8)' if x >= 0 else 'rgba(239, 83, 80, 0.8)')
     
@@ -56,49 +49,42 @@ def process_data(data):
 ## PART 2: App Layout & Rendering ##
 ###############################################
 
-st.set_page_config(layout="wide", page_title="Pro Stock Dashboard")
-st.title('📈 Pro Stock Dashboard (TradingView Style)')
+st.set_page_config(layout="wide", page_title="Pro Trading Dashboard")
+st.title('📈 Pro Trading Dashboard (Stable Version)')
 
-# --- Sidebar Settings ---
+# Sidebar
 st.sidebar.header('Chart Settings')
-ticker = st.sidebar.text_input('Ticker Symbol', 'TSLA').upper()
-time_period = st.sidebar.selectbox('Period', ['1mo', '3mo', '6mo', '1y', 'max'], index=1)
-interval = '1d' # ใช้รายวันเพื่อความเสถียรของ Indicator
+ticker = st.sidebar.text_input('Ticker Symbol', 'NVDA').upper()
+time_period = st.sidebar.selectbox('Period', ['3mo', '6mo', '1y', 'max'], index=0)
 
-raw = fetch_stock_data(ticker, time_period, interval)
+raw = fetch_stock_data(ticker, time_period, '1d')
 
 if not raw.empty:
     df = process_data(raw)
     
-    # แสดงราคาล่าสุดและราคาปิดก่อนหน้า
-    last_p = float(raw['Close'].iloc[-1])
-    prev_p = float(raw['Close'].iloc[-2])
+    # Metric Price
+    last_p = float(df['Close'].iloc[-1])
+    prev_p = float(df['Close'].iloc[-2])
     diff = last_p - prev_p
     p_diff = (diff / prev_p) * 100
-    st.metric(f"{ticker} Latest Price", f"{last_p:.2f} USD", f"{diff:.2f} ({p_diff:.2f}%)")
+    st.metric(f"{ticker}", f"{last_p:.2f} USD", f"{diff:.2f} ({p_diff:.2f}%)")
 
-    # --- กราฟที่ 1: Price & Volume ---
+    # --- 1. กราฟหลัก (Price + SMA + Volume) ---
     st.subheader("Price & Volume")
     
+    # เตรียมข้อมูล (ตัด NaN ออกให้หมด)
+    candles = df[['time','Open','High','Low','Close']].copy()
+    candles.columns = ['time','open','high','low','close']
+    
+    sma_data = df[['time','SMA_20']].dropna().copy()
+    sma_data.columns = ['time','value']
+    
+    vol_data = [{"time": int(r['time']), "value": float(r['Volume']), "color": r['vol_color']} for _, r in df.iterrows()]
+
     price_series = [
-        # Candlestick
-        {
-            "type": "Candlestick",
-            "data": df[['time','Open','High','Low','Close']].rename(columns={'Open':'open','High':'high','Low':'low','Close':'close'}).to_dict('records'),
-            "options": {"upColor": "#26a69a", "downColor": "#ef5350", "borderVisible": False}
-        },
-        # SMA 20 Line
-        {
-            "type": "Line",
-            "data": df[['time','SMA_20']].dropna().rename(columns={'SMA_20':'value'}).to_dict('records'),
-            "options": {"color": "#f29d4b", "lineWidth": 1.5, "title": "SMA 20"}
-        },
-        # Volume Histogram (Overlay)
-        {
-            "type": "Histogram",
-            "data": [{"time": r['time'], "value": r['Volume'], "color": r['vol_color']} for _, r in df.iterrows()],
-            "options": {"priceFormat": {"type": "volume"}, "priceScaleId": "vol_scale", "title": "Volume"}
-        }
+        {"type": "Candlestick", "data": candles.to_dict('records'), "options": {"upColor": "#26a69a", "downColor": "#ef5350", "borderVisible": False}},
+        {"type": "Line", "data": sma_data.to_dict('records'), "options": {"color": "#f29d4b", "lineWidth": 1.5, "title": "SMA 20"}},
+        {"type": "Histogram", "data": vol_data, "options": {"priceFormat": {"type": "volume"}, "priceScaleId": "vol_scale", "title": "Volume"}}
     ]
     
     renderLightweightCharts(price_series, {
@@ -109,13 +95,12 @@ if not raw.empty:
         "timeScale": {"timeVisible": True, "borderColor": "#485c7b"}
     }, key="main_chart")
 
-    # --- กราฟที่ 2: RSI ---
+    # --- 2. กราฟ RSI ---
     st.subheader("RSI (14)")
-    rsi_series = [{
-        "type": "Line",
-        "data": df[['time','RSI']].dropna().rename(columns={'RSI':'value'}).to_dict('records'),
-        "options": {"color": "#9b72ff", "lineWidth": 2, "title": "RSI"}
-    }]
+    rsi_data = df[['time','RSI']].dropna().copy()
+    rsi_data.columns = ['time','value']
+    
+    rsi_series = [{"type": "Line", "data": rsi_data.to_dict('records'), "options": {"color": "#9b72ff", "lineWidth": 2}}]
     
     renderLightweightCharts(rsi_series, {
         "layout": {"background": {"color": "#131722"}, "textColor": "#d1d4dc"},
@@ -123,12 +108,16 @@ if not raw.empty:
         "height": 150
     }, key="rsi_chart")
 
-    # --- กราฟที่ 3: MACD ---
+    # --- 3. กราฟ MACD ---
     st.subheader("MACD")
+    m_line = df[['time','MACD']].dropna().rename(columns={'MACD':'value'}).to_dict('records')
+    m_sig = df[['time','MACD_Signal']].dropna().rename(columns={'MACD_Signal':'value'}).to_dict('records')
+    m_hist = df[['time','MACD_Diff','macd_color']].dropna().rename(columns={'MACD_Diff':'value','macd_color':'color'}).to_dict('records')
+
     macd_series = [
-        {"type": "Line", "data": df[['time','MACD']].dropna().rename(columns={'MACD':'value'}).to_dict('records'), "options": {"color": "#2196f3", "lineWidth": 1.5, "title": "MACD"}},
-        {"type": "Line", "data": df[['time','MACD_Signal']].dropna().rename(columns={'MACD_Signal':'value'}).to_dict('records'), "options": {"color": "#ff5252", "lineWidth": 1.5, "title": "Signal"}},
-        {"type": "Histogram", "data": df[['time','MACD_Diff','macd_color']].rename(columns={'MACD_Diff':'value','macd_color':'color'}).to_dict('records'), "options": {"title": "Diff"}}
+        {"type": "Line", "data": m_line, "options": {"color": "#2196f3", "lineWidth": 1.5, "title": "MACD"}},
+        {"type": "Line", "data": m_sig, "options": {"color": "#ff5252", "lineWidth": 1.5, "title": "Signal"}},
+        {"type": "Histogram", "data": m_hist, "options": {"title": "Histogram"}}
     ]
     
     renderLightweightCharts(macd_series, {
@@ -137,9 +126,8 @@ if not raw.empty:
         "height": 200
     }, key="macd_chart")
 
-    # --- Raw Data Expandable ---
-    with st.expander("View Raw Historical Data"):
-        st.dataframe(raw.tail(20))
-
 else:
-    st.warning("Please enter a valid Ticker symbol in the sidebar.")
+    st.info("กรุณาใส่ชื่อ Ticker หุ้นใน Sidebar เพื่อเริ่มแสดงกราฟ")
+
+st.sidebar.markdown("---")
+st.sidebar.caption("Powered by Streamlit & Lightweight Charts")
